@@ -11,7 +11,10 @@ import {
   readMcpOAuthStatusesInDatabase,
 } from "../agents/mcp-oauth-store.kernel.js";
 import {
+  loadSubagentMaintenanceRunsInDatabase,
+  loadSubagentRegistryFromSqlite,
   loadSubagentRunsByRunIdsFromSqlite,
+  loadSubagentRunsForSessionsInDatabase,
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
@@ -100,7 +103,7 @@ import type {
 } from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
-import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.js";
+import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import {
   listUserChannelIdentitiesInDatabase,
   resolveUserChannelIdentityInDatabase,
@@ -240,6 +243,34 @@ serveOwnedWorkerTasks(
               return readChannelIngressInDatabase(db, command);
             }
             if (command.type === "subagents.runs") {
+              if (command.scope.kind === "all") {
+                return { type: command.type, runs: loadSubagentRegistryFromSqlite({ db }) };
+              }
+              if (command.scope.kind === "maintenance") {
+                const maintenance = loadSubagentMaintenanceRunsInDatabase({ db });
+                return {
+                  type: command.type,
+                  projection: "maintenance",
+                  runs: maintenance.runs,
+                  maintenanceDigest: maintenance.digest,
+                };
+              }
+              if (command.scope.kind === "descendants") {
+                const descendants = loadSubagentRunsForSessionsInDatabase(
+                  { db },
+                  command.scope.sessionKeys,
+                  command.scope.liveTopology,
+                );
+                return {
+                  type: command.type,
+                  runs: descendants.runs,
+                  descendantBasis: {
+                    digest: descendants.digest,
+                    sessionKeys: descendants.sessionKeys,
+                    runIds: descendants.runIds,
+                  },
+                };
+              }
               const rows =
                 command.scope.kind === "session"
                   ? loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db })
