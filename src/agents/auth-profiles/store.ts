@@ -20,6 +20,7 @@ import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
 import {
   syncPersistedExternalCliAuthProfiles,
   type createExternalAuthRuntime,
+  type ExternalCliOverlayOptions,
 } from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import {
@@ -60,7 +61,6 @@ import {
   updatePersonalAuthProfileStore,
 } from "./personal-profiles.js";
 import {
-  getRuntimeExternalCliProfileIds,
   mergeRuntimeExternalProfileReferences,
   removePersonalAuthProfileReferences,
   setRuntimeExternalCliProfileIds,
@@ -70,7 +70,6 @@ import {
   resolveExternalCliOverlayOptions,
   type AuthProfileReadOwner,
   type LoadAuthProfileStoreOptions,
-  type ResolvedExternalCliOverlayOptions,
 } from "./runtime-read.js";
 import {
   captureRuntimeAuthProfileLegacyCandidates,
@@ -311,7 +310,7 @@ function loadPersistedAuthProfileStores(
   };
 }
 
-function hasScopedExternalCliOverlay(options: ResolvedExternalCliOverlayOptions): boolean {
+function hasScopedExternalCliOverlay(options: ExternalCliOverlayOptions): boolean {
   return (
     options.externalCliProviderIds !== undefined || options.externalCliProfileIds !== undefined
   );
@@ -395,23 +394,6 @@ function convergeRuntimeAuthProfileStoreSnapshot(
   }
 }
 
-function setRuntimeExternalProfileMetadata(params: {
-  store: AuthProfileStore;
-  profileIds: ReadonlySet<string>;
-  authoritative: boolean;
-}): void {
-  const profileIds = [...params.profileIds].toSorted();
-  params.store.runtimeExternalProfileIds =
-    profileIds.length > 0 || params.authoritative ? profileIds : undefined;
-  params.store.runtimeExternalProfileIdsAuthoritative = params.authoritative ? true : undefined;
-  setRuntimeExternalCliProfileIds(
-    params.store,
-    getRuntimeExternalCliProfileIds(params.store).filter((profileId) =>
-      params.profileIds.has(profileId),
-    ),
-  );
-}
-
 function materializeRuntimeAuthProfileStoreSnapshot(
   next: AuthProfileStore,
   existing: AuthProfileStore,
@@ -420,89 +402,6 @@ function materializeRuntimeAuthProfileStoreSnapshot(
     next: preserveResolvedSecretBackedCredentials({ next, existing }),
     existing,
   });
-}
-
-function mergeRuntimeExternalProfileState(params: {
-  next: AuthProfileStore;
-  existing: AuthProfileStore;
-}): AuthProfileStore {
-  const existingRuntimeProfileIds = new Set(params.existing.runtimeExternalProfileIds ?? []);
-  if (existingRuntimeProfileIds.size === 0) {
-    return mergeRuntimeExternalProfileReferences(params);
-  }
-  const merged = cloneAuthProfileStore(params.next);
-  const mergedRuntimeProfileIds = new Set(merged.runtimeExternalProfileIds ?? []);
-  const existingRuntimeExternalCliProfileIds = new Set(
-    getRuntimeExternalCliProfileIds(params.existing),
-  );
-  const mergedRuntimeExternalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(merged));
-  const activeRuntimeProfileIds = new Set<string>();
-  const nextRuntimeProfileIdsAuthoritative =
-    params.next.runtimeExternalProfileIdsAuthoritative === true;
-  for (const profileId of existingRuntimeProfileIds) {
-    if (nextRuntimeProfileIdsAuthoritative && !mergedRuntimeProfileIds.has(profileId)) {
-      continue;
-    }
-    const existingCredential = params.existing.profiles[profileId];
-    if (!existingCredential) {
-      continue;
-    }
-    const nextCredential = merged.profiles[profileId];
-    if (
-      nextCredential &&
-      !mergedRuntimeProfileIds.has(profileId) &&
-      !isDeepStrictEqual(nextCredential, existingCredential)
-    ) {
-      continue;
-    }
-    if (!nextCredential) {
-      merged.profiles[profileId] = existingCredential;
-    }
-    mergedRuntimeProfileIds.add(profileId);
-    activeRuntimeProfileIds.add(profileId);
-    if (existingRuntimeExternalCliProfileIds.has(profileId)) {
-      mergedRuntimeExternalCliProfileIds.add(profileId);
-    }
-  }
-  if (activeRuntimeProfileIds.size === 0) {
-    return params.next;
-  }
-  for (const profileId of activeRuntimeProfileIds) {
-    if (params.existing.usageStats?.[profileId]) {
-      merged.usageStats = {
-        ...merged.usageStats,
-        [profileId]: params.existing.usageStats[profileId],
-      };
-    }
-  }
-  for (const [provider, profileIds] of Object.entries(params.existing.order ?? {})) {
-    const externalProfileIds = profileIds.filter((profileId) =>
-      activeRuntimeProfileIds.has(profileId),
-    );
-    if (externalProfileIds.length === 0 || merged.order?.[provider]) {
-      continue;
-    }
-    merged.order = {
-      ...merged.order,
-      [provider]: externalProfileIds,
-    };
-  }
-  for (const [provider, profileId] of Object.entries(params.existing.lastGood ?? {})) {
-    if (!activeRuntimeProfileIds.has(profileId) || merged.lastGood?.[provider]) {
-      continue;
-    }
-    merged.lastGood = {
-      ...merged.lastGood,
-      [provider]: profileId,
-    };
-  }
-  setRuntimeExternalProfileMetadata({
-    store: merged,
-    profileIds: mergedRuntimeProfileIds,
-    authoritative: params.existing.runtimeExternalProfileIdsAuthoritative === true,
-  });
-  setRuntimeExternalCliProfileIds(merged, mergedRuntimeExternalCliProfileIds);
-  return merged;
 }
 
 /** Whether an agent dir resolves to the shared main auth-profile owner. */
@@ -1660,18 +1559,20 @@ export function createAuthProfileStoreRuntime(
       // Scoped turn/control-plane resolution returns only the requested overlay, but the lifecycle
       // snapshot must retain unrelated external profiles. Publish the merged owner fact so prepared
       // model and chat metadata generations converge without reopening credential sources.
-      const materialized = mergeRuntimeExternalProfileState({
+      const materialized = mergeRuntimeExternalProfileReferences({
         next: store,
         existing: runtimeStore,
+        externalRefresh: true,
       });
       if (!isDeepStrictEqual(materialized, runtimeStore)) {
         updateRuntimeAuthProfileStoreSnapshot(materialized, effectiveAgentDir);
       }
       return store;
     }
-    return mergeRuntimeExternalProfileState({
+    return mergeRuntimeExternalProfileReferences({
       next: store,
       existing: runtimeStore,
+      externalRefresh: true,
     });
   }
 
