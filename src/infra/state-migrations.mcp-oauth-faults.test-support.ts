@@ -55,9 +55,9 @@ export function observeLegacyMcpOAuthImport(
       );
     restore.push(() => created.mockRestore());
   }
-  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply retains the original Worker receiver.
-  const post = Worker.prototype.postMessage;
-  const posted = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+  // The passthrough spy keeps the native receiver and owns prototype restoration.
+  const post = vi.spyOn(Worker.prototype, "postMessage");
+  Worker.prototype.postMessage = function (
     this: Worker,
     ...args: Parameters<Worker["postMessage"]>
   ) {
@@ -78,9 +78,9 @@ export function observeLegacyMcpOAuthImport(
         importCount++;
       }
     }
-    return Reflect.apply(post, this, args);
-  });
-  restore.push(() => posted.mockRestore());
+    return post.apply(this, args);
+  };
+  restore.push(() => post.mockRestore());
 
   return {
     importCount: () => importCount,
