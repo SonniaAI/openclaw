@@ -26,7 +26,10 @@ describe("gateway restart budget (SON-4330)", () => {
     expect(resolveGatewayRestartDeferralTimeoutMs()).toBe(300_000);
     expect(resolveGatewayRestartDeferralTimeoutMs(45_000)).toBe(45_000);
     expect(resolveGatewayRestartDeferralTimeoutMs(0)).toBeUndefined();
-    expect(resolveGatewayRestartDeferralTimeoutMs("nonsense")).toBeUndefined();
+    // Implementation contract (SON-4345 alignment): invalid explicit overrides
+    // fall back to the default rather than yielding undefined; only the env
+    // sanitizer (resolveEnvGatewayRestartDeferralTimeoutMs) maps garbage → undefined.
+    expect(resolveGatewayRestartDeferralTimeoutMs("nonsense")).toBe(300_000);
   });
 
   it("sizes the deferral timeout from the environment when provided", () => {

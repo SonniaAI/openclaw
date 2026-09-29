@@ -137,12 +137,24 @@ export function resolveGatewayShutdownDrainBudget(params: {
   // SON-4330: forced-restart decision point (deferral timeout). When present,
   // the drain budget is measured from here instead of reload acceptance so a
   // deferred restart still receives its full cleanup budget.
+  // SON-4345: this stamp is epoch wall-clock ms (Date.now()) — it is consumed
+  // epoch-to-epoch below, never as a performance.now() offset.
   drainBudgetStartAtMs?: number;
 }) {
   const { budget, action } = params;
   const isRestart = action !== "stop";
   const requested = params.requestedRestartDrainTimeoutMs;
-  const elapsedMs = performance.now() - (params.drainBudgetStartAtMs ?? params.acceptedAtMs);
+  // SON-4345 clock-domain fix: drainBudgetStartAtMs is stamped with Date.now()
+  // (epoch wall-clock ms) by the restart intent, while acceptedAtMs is a
+  // performance.now() offset (ms since process start). Subtract like-for-like:
+  // epoch-to-epoch when the intent stamp is present, monotonic-to-monotonic
+  // otherwise. Mixing domains made elapsed ≈ performance.now() - Date.now() ≈
+  // -1.79e12ms, so remaining exploded to the drilled 1790706996214ms and the
+  // in-flight run got ~0ms of real cleanup before the forced deadline stop.
+  const elapsedMs =
+    params.drainBudgetStartAtMs !== undefined
+      ? Date.now() - params.drainBudgetStartAtMs
+      : performance.now() - params.acceptedAtMs;
   const remaining = requested === undefined ? undefined : Math.max(0, requested - elapsedMs);
   const floorMs = params.forceRestart ? GATEWAY_RESTART_DRAIN_FLOOR_MS : 0;
   const restartDrainTimeoutMs = budget.nativeStopBudget

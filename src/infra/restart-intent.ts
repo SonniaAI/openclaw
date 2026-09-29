@@ -71,6 +71,8 @@ export type GatewayRestartIntent = {
   // Process-local only: the forced-restart decision point (deferral timeout).
   // The drain budget is measured from here, not from reload acceptance, so a
   // deferred restart still receives its full cleanup budget (SON-4330).
+  // Epoch wall-clock ms (Date.now()); consumed epoch-to-epoch, never as a
+  // performance.now() offset (SON-4345).
   drainBudgetStartAtMs?: number;
   // Process-local only: persisted restart requests cannot delegate successor ownership.
   successorOwner?: {
