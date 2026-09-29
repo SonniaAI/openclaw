@@ -97,7 +97,7 @@ export async function respondDesktopObserve(params: {
   }
   try {
     const result = await service.observeDesktop({
-      environmentId: params.request.source.environmentId,
+      environmentId: request.source.environmentId,
       control: params.request.control ?? false,
       requester: params.requester,
     });
