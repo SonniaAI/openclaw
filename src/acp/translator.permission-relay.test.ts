@@ -151,13 +151,28 @@ function captureRetry(agent: AcpGatewayAgent, approvalId: string): () => Promise
 }
 
 describe("ACP translator permission relay", () => {
-  it.each(["allow-always", "deny"] as const)(
-    "relays an explicit %s selection to Gateway approval resolution",
-    async (decision) => {
+  it.each([
+    {
+      name: "explicit allow-always",
+      outcome: { outcome: "selected", optionId: "allow-always" },
+      decision: "allow-always",
+    },
+    {
+      name: "explicit deny",
+      outcome: { outcome: "selected", optionId: "deny" },
+      decision: "deny",
+    },
+    { name: "cancelled", outcome: { outcome: "cancelled" }, decision: "deny" },
+    {
+      name: "unknown option",
+      outcome: { outcome: "selected", optionId: "not-a-real-option" },
+      decision: "deny",
+    },
+  ])(
+    "relays the $name outcome as $decision to Gateway approval resolution",
+    async ({ outcome, decision }) => {
       const harness = await createHarness({
-        requestPermission: vi.fn(async () => ({
-          outcome: { outcome: "selected", optionId: decision },
-        })),
+        requestPermission: vi.fn(async () => ({ outcome })),
       });
       try {
         await harness.agent.handleGatewayEvent(approval(harness.runId));

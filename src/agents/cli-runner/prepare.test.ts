@@ -5033,7 +5033,7 @@ describe("prepareCliRunContext", () => {
     expect(fs.existsSync(pluginDir)).toBe(false);
   });
 
-  it.each(["raw", "compacted", "blocked", "cancelled", "foreign-maintenance"] as const)(
+  it.each(["empty", "raw", "compacted", "blocked", "cancelled", "foreign-maintenance"] as const)(
     "isolates %s caller memory through outer normalization and real CLI execution",
     async (scenario) => {
       const { dir, sessionTarget: fixtureTarget } = fixture.session;

@@ -747,6 +747,29 @@ describe("gateway/node-registry", () => {
     expect(frames).toEqual([]);
   });
 
+  it("does not dispatch when runtime authority closes during pairing resolution", async () => {
+    const { registry, frames, release } = registerPairingWait();
+    let authorityActive = true;
+    const onDispatchReady = vi.fn();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-a",
+      command: "system.run",
+      isDispatchAuthorized: () => authorityActive,
+      onDispatchReady,
+    });
+
+    authorityActive = false;
+    release();
+
+    await expect(invoke).resolves.toEqual(
+      failure("APPROVAL_AUTHORITY_CLOSED", "runtime authority closed before node dispatch"),
+    );
+    expect(frames).toEqual([]);
+    expect(onDispatchReady).not.toHaveBeenCalled();
+  });
+
   it("fails closed without dispatching when the pairing store is unavailable during invoke", async () => {
     const frames: string[] = [];
     const registry = createNodeRegistry({
@@ -1449,37 +1472,43 @@ describe("gateway/node-registry", () => {
     expect(progress(registry, invokeId, 2, "late")).toBe(false);
   });
 
-  it("does not reset streamed idle timeout for distinct progress buffered behind a gap", async () => {
-    vi.useFakeTimers();
-    const registry = createNodeRegistry();
-    const chunks: string[] = [];
-    const onTerminal = vi.fn();
-    const { frames, invoke, invokeId } = startStreamingNodeInvoke(registry, {
-      timeoutMs: 0,
-      idleTimeoutMs: 50,
-      onProgress: (chunk) => chunks.push(chunk),
-    });
-    void invoke.then(onTerminal);
+  it.each([
+    { firstSeq: 0, timeoutMs: 0, deliveredChunks: [""], missingSeq: 1 },
+    { firstSeq: 1, timeoutMs: 1_000, deliveredChunks: [], missingSeq: 0 },
+  ])(
+    "starts and preserves streamed idle timeout with first progress sequence $firstSeq",
+    async ({ firstSeq, timeoutMs, deliveredChunks, missingSeq }) => {
+      vi.useFakeTimers();
+      const registry = createNodeRegistry();
+      const chunks: string[] = [];
+      const onTerminal = vi.fn();
+      const { frames, invoke, invokeId } = startStreamingNodeInvoke(registry, {
+        timeoutMs,
+        idleTimeoutMs: 50,
+        onProgress: (chunk) => chunks.push(chunk),
+      });
+      void invoke.then(onTerminal);
 
-    // Empty ordered chunks are valid node-host liveness heartbeats.
-    expect(progress(registry, invokeId, 0, "")).toBe(true);
-    expect(chunks).toEqual([""]);
+      // Empty ordered chunks are valid node-host liveness heartbeats.
+      expect(progress(registry, invokeId, firstSeq, "")).toBe(true);
+      expect(chunks).toEqual(deliveredChunks);
 
-    for (const seq of [2, 3]) {
-      await vi.advanceTimersByTimeAsync(20);
-      expect(progress(registry, invokeId, seq, `future-${seq}`)).toBe(true);
-      expect(chunks).toEqual([""]);
-      expect(progress(registry, invokeId, seq, `future-${seq}`)).toBe(false);
-    }
+      for (const seq of [2, 3]) {
+        await vi.advanceTimersByTimeAsync(20);
+        expect(progress(registry, invokeId, seq, `future-${seq}`)).toBe(true);
+        expect(chunks).toEqual(deliveredChunks);
+        expect(progress(registry, invokeId, seq, `future-${seq}`)).toBe(false);
+      }
 
-    await vi.advanceTimersByTimeAsync(10);
-    expect(onTerminal).toHaveBeenCalledExactlyOnceWith(idleTimedOut);
-    expect(chunks).toEqual([""]);
-    expectCancellation(frames, invokeId);
-    expect(progress(registry, invokeId, 1, "missing")).toBe(false);
-    await vi.runOnlyPendingTimersAsync();
-    expectCancellation(frames, invokeId);
-  });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(onTerminal).toHaveBeenCalledExactlyOnceWith(idleTimedOut);
+      expect(chunks).toEqual(deliveredChunks);
+      expectCancellation(frames, invokeId);
+      expect(progress(registry, invokeId, missingSeq, "missing")).toBe(false);
+      await vi.runOnlyPendingTimersAsync();
+      expectCancellation(frames, invokeId);
+    },
+  );
 
   it("bounds future progress behind a permanent sequence gap until idle teardown", async () => {
     vi.useFakeTimers();
