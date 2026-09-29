@@ -7,6 +7,7 @@ import {
   GATEWAY_SUPERVISOR_EXIT_MARGIN_MS,
 } from "../../infra/gateway-shutdown-budget.js";
 import { readSystemdStopTimeout } from "../../infra/systemd-stop-timeout.js";
+import { resolveGatewayMinDrainBudgetMs } from "../../infra/restart-budget.js";
 
 export async function resolveGatewayShutdownBudget(
   supervisor: string | null,
@@ -75,12 +76,24 @@ export function resolveGatewayShutdownDrainBudget(params: {
   forceRestart: boolean;
   restartWithoutSupervisor: boolean;
   acceptedAtMs: number;
+  /** SON-4330: monotonic stamp of the forced-restart decision point. When present, the requested restart drain budget is measured from this instant instead of reload acceptance, so a deferred restart keeps its full cleanup budget. */
+  drainStartedAtMs?: number;
+  /** SON-4330: nonzero floor for a requested drain budget starved to zero by pre-close waiting; shutdown must never enter with 0ms of cleanup. */
+  minDrainBudgetMs?: number;
   requestedRestartDrainTimeoutMs?: number;
 }) {
   const { budget, isRestart } = params;
   const requested = params.requestedRestartDrainTimeoutMs;
-  const elapsedMs = performance.now() - params.acceptedAtMs;
-  const remaining = requested === undefined ? undefined : Math.max(0, requested - elapsedMs);
+  const drainAnchorMs = params.drainStartedAtMs ?? params.acceptedAtMs;
+  const elapsedMs = performance.now() - drainAnchorMs;
+  const rawRemaining = requested === undefined ? undefined : Math.max(0, requested - elapsedMs);
+  // SON-4330: a requested budget starved to zero by pre-close waiting (deferral
+  // window, emission retries) is floored to a nonzero cleanup budget. An
+  // explicit exhausted attestation (requested === 0) is honored as-is.
+  const remaining =
+    rawRemaining === 0 && requested !== undefined && requested > 0
+      ? (params.minDrainBudgetMs ?? resolveGatewayMinDrainBudgetMs())
+      : rawRemaining;
   const restartDrainTimeoutMs = budget.nativeStopBudget
     ? Math.min(remaining ?? Infinity, Math.max(0, budget.timeoutMs - budget.reserveMs))
     : remaining;
@@ -120,4 +133,22 @@ export function resolveGatewayShutdownDrainBudget(params: {
         ? undefined
         : restartTimeoutMs(restartDrainTimeoutMs),
   };
+}
+
+/** SON-4330: exit code when an armed shutdown deadline fires. A planned restart
+ * that exhausts its (nonzero) drain budget is a successful handoff to the
+ * supervisor replacement rather than a crash: exit cleanly unless a shutdown
+ * step failed, the restart has no successor process, or it is a stop without a
+ * confirmed native stop budget. */
+export function resolveForcedShutdownExitCode(params: {
+  isRestart: boolean;
+  nativeStopBudget: boolean;
+  restartWithoutSupervisor: boolean;
+  shutdownFailure: boolean;
+}): 0 | 1 {
+  return !params.shutdownFailure &&
+    !params.restartWithoutSupervisor &&
+    (params.nativeStopBudget || params.isRestart)
+    ? 0
+    : 1;
 }

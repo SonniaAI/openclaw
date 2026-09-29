@@ -184,7 +184,8 @@ export function registerShutdownCompletionTests({
         expect(runtime.exit).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
         expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+        // SON-4330: a planned restart deadline exit is a clean successor handoff, not a crash.
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
       } finally {
         vi.clearAllTimers();
         vi.useRealTimers();
@@ -247,8 +248,9 @@ export function registerShutdownCompletionTests({
         await vi.advanceTimersByTimeAsync(9_999);
         expect(runtime.exit).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-        await expect(exited).resolves.toBe(1);
+        // SON-4330: planned restart deadline exits cleanly (supervisor replaces the process).
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
+        await expect(exited).resolves.toBe(0);
         expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledExactlyOnceWith(
           managedUpdateSuccessorOwner,
         );
@@ -295,7 +297,8 @@ export function registerShutdownCompletionTests({
           expect(armShutdownHardExitWatchdog).toHaveBeenCalledOnce();
           expect(cancelShutdownHardExitWatchdog).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(625_000);
-          await expect(exited).resolves.toBe(1);
+          // SON-4330: restart (SIGUSR2) deadlines exit cleanly; stops keep the old semantics.
+          await expect(exited).resolves.toBe(signal === "SIGUSR2" ? 0 : 1);
         } finally {
           vi.clearAllTimers();
           vi.useRealTimers();

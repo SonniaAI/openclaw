@@ -47,6 +47,7 @@ import {
   type GatewayRunSignalRequest,
 } from "./run-loop-request.js";
 import {
+  resolveForcedShutdownExitCode,
   resolveGatewayShutdownDrainBudget,
   resolveGatewayShutdownBudget,
 } from "./run-loop-shutdown-budget.js";
@@ -725,13 +726,23 @@ export async function runGatewayLoop(params: {
       }
       shutdownDeadline = performance.now() + forceExitMs;
       forceExitTimer = setTimeout(() => {
-        const cleanExit = budget.nativeStopBudget && !restartWithoutSupervisor && !shutdownFailure;
+        // SON-4330: a planned restart that exhausts its (nonzero) drain budget
+        // is a successful handoff to the supervisor replacement, not a crash.
+        // SON-4330: a planned restart that exhausts its (nonzero) drain budget
+        // is a successful handoff to the supervisor replacement, not a crash.
+        // forcedExitCode IS the exit code (0 = clean handoff), not a flag.
+        const forcedExitCode = resolveForcedShutdownExitCode({
+          isRestart,
+          nativeStopBudget: budget.nativeStopBudget,
+          restartWithoutSupervisor,
+          shutdownFailure: shutdownFailure !== undefined,
+        });
         gatewayLog.warn(
-          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; exiting ${cleanExit ? "cleanly" : "with incomplete cleanup"}`,
+          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; exiting ${forcedExitCode === 0 ? "cleanly" : "with incomplete cleanup"}`,
         );
         void forceExitAfterStabilityBundle(
           isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
-          cleanExit ? 0 : 1,
+          forcedExitCode,
           shutdownFailure,
         );
       }, forceExitMs);
@@ -790,6 +801,7 @@ export async function runGatewayLoop(params: {
         forceRestart: Boolean(restartIntent?.force || restartIntent?.drainBudgetExhausted),
         restartWithoutSupervisor,
         acceptedAtMs: acceptedRequest.acceptedAtMs,
+        drainStartedAtMs: restartIntent?.drainStartedAtMs,
         requestedRestartDrainTimeoutMs: isRestart
           ? eagerLifecycleRuntime.resolveGatewayRestartDrainTimeoutMs(restartIntent)
           : 0,

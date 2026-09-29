@@ -741,7 +741,11 @@ export function deferGatewayRestartUntilIdle(
     void emitPreparedGatewayRestart(
       opts.emitHooks,
       opts.reason,
-      timedOut ? { ...opts.timeoutIntent, drainBudgetExhausted: true } : undefined,
+      // SON-4330: a deferral timeout is the forced-restart DECISION point, not
+      // evidence that a drain budget was spent. Start a fresh drain budget
+      // here (monotonic stamp) instead of attesting exhaustion, so deferred
+      // restarts keep their full cleanup budget and never drain for 0ms.
+      timedOut ? { ...opts.timeoutIntent, drainStartedAtMs: monotonicNow() } : undefined,
       {
         finalIdleCheck: timedOut
           ? undefined

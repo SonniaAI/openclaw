@@ -205,6 +205,7 @@ describe("gateway restart intent", () => {
       reason: "gateway.restart",
       force: true,
       waitMs: 12_345,
+      drainStartedAtMs: expect.any(Number),
     });
     expect(readIntentRow(env)).toBeUndefined();
     expect(fs.existsSync(legacyIntentPath(env))).toBe(false);
@@ -216,6 +217,7 @@ describe("gateway restart intent", () => {
 
     expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({
       reason: "x".repeat(199),
+      drainStartedAtMs: expect.any(Number),
     });
   });
 
@@ -242,6 +244,6 @@ describe("gateway restart intent", () => {
       pid: process.pid,
       reason: "second",
     });
-    expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({ reason: "second" });
+    expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({ reason: "second", drainStartedAtMs: expect.any(Number) });
   });
 });

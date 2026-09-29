@@ -4397,7 +4397,7 @@ describe("gateway restart deferral preflight", () => {
       expect(signalSpy).toHaveBeenCalledTimes(1);
       expect(consumeGatewayRestartIntent()).toEqual({
         force: true,
-        drainBudgetExhausted: true,
+        drainStartedAtMs: expect.any(Number),
         reason: "config reload forced restart",
       });
       expect(hoisted.markRestartAbortedMainSessions).not.toHaveBeenCalled();

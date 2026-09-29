@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 // Persists short-lived gateway restart intent for supervisor SIGTERM handoff.
@@ -58,6 +59,12 @@ export type GatewayRestartIntent = {
   waitMs?: number;
   // Only the in-process deferral owner can attest that the drain budget was spent.
   drainBudgetExhausted?: true;
+  // SON-4330: process-local monotonic stamp (performance.now) captured when the
+  // forced-restart decision starts the drain budget (deferral timeout fire, or
+  // consumption of a persisted intent). The close path measures the requested
+  // restart drain from this instant instead of reload acceptance, so a
+  // deferred restart keeps its full cleanup budget.
+  drainStartedAtMs?: number;
   // Process-local only: persisted restart requests cannot delegate successor ownership.
   successorOwner?: {
     kind: "managed-update-handoff";
@@ -466,6 +473,10 @@ export function consumeGatewayRestartIntentPayloadSync(
     ...(payload.reason ? { reason: payload.reason } : {}),
     ...(payload.force ? { force: true } : {}),
     ...(typeof payload.waitMs === "number" ? { waitMs: payload.waitMs } : {}),
+    // SON-4330: consumption is the in-process arrival of the restart decision;
+    // stamp it so the close path measures the requested drain budget from this
+    // decision point instead of the original reload acceptance.
+    drainStartedAtMs: performance.now(),
   };
 }
 
