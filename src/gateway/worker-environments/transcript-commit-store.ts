@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Selectable } from "kysely";
+import type { Insertable, Selectable } from "kysely";
 import type {
   WorkerTranscriptCommitErrorReason,
   WorkerTranscriptCommitResult,
@@ -26,7 +26,9 @@ type TranscriptCommitDb = Pick<
   "worker_transcript_commit_heads" | "worker_transcript_commits"
 >;
 type HeadRow = Selectable<WorkerTranscriptCommitHeads>;
+type HeadInsert = Insertable<WorkerTranscriptCommitHeads>;
 type CommitRow = Selectable<WorkerTranscriptCommits>;
+type CommitInsert = Insertable<WorkerTranscriptCommits>;
 
 export type WorkerTranscriptCommitInput = {
   environmentId: string;
@@ -196,6 +198,31 @@ function classifyExistingCommit(params: {
   throw new Error("Worker transcript commit row has invalid terminal state");
 }
 
+function insertHead(db: DatabaseSync, input: NormalizedCommitInput): void {
+  const head: HeadInsert = {
+    session_id: input.sessionId,
+    run_epoch: input.runEpoch,
+    environment_id: input.environmentId,
+    next_seq: 1,
+    updated_at_ms: input.nowMs,
+  };
+  executeSqliteQuerySync(db, query(db).insertInto("worker_transcript_commit_heads").values(head));
+}
+
+function insertPendingCommit(db: DatabaseSync, input: NormalizedCommitInput): void {
+  const commit: CommitInsert = {
+    session_id: input.sessionId,
+    run_epoch: input.runEpoch,
+    seq: input.seq,
+    request_hash: input.requestHash,
+    state: "pending",
+    result_json: null,
+    created_at_ms: input.nowMs,
+    updated_at_ms: input.nowMs,
+  };
+  executeSqliteQuerySync(db, query(db).insertInto("worker_transcript_commits").values(commit));
+}
+
 export function createWorkerTranscriptCommitStore(
   options: { database?: OpenClawStateDatabase; now?: () => number } = {},
 ) {
@@ -220,30 +247,9 @@ export function createWorkerTranscriptCommitStore(
         return { kind: "rejected", reason: "out-of-order", expectedSeq };
       }
       if (!head) {
-        executeSqliteQuerySync(
-          db,
-          query(db).insertInto("worker_transcript_commit_heads").values({
-            session_id: input.sessionId,
-            run_epoch: input.runEpoch,
-            environment_id: input.environmentId,
-            next_seq: 1,
-            updated_at_ms: input.nowMs,
-          }),
-        );
+        insertHead(db, input);
       }
-      executeSqliteQuerySync(
-        db,
-        query(db).insertInto("worker_transcript_commits").values({
-          session_id: input.sessionId,
-          run_epoch: input.runEpoch,
-          seq: input.seq,
-          request_hash: input.requestHash,
-          state: "pending",
-          result_json: null,
-          created_at_ms: input.nowMs,
-          updated_at_ms: input.nowMs,
-        }),
-      );
+      insertPendingCommit(db, input);
       return { kind: "claimed" };
     });
   };
