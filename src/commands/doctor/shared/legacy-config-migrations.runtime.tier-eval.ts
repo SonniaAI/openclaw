@@ -190,37 +190,21 @@ function migrateChannelAliases(raw: Record<string, unknown>, changes: string[]):
       httpHost: signal.httpHost,
       httpPort: signal.httpPort,
     };
-    migrateSignalEndpoint(signal, "channels.signal", changes);
-    const accounts = getRecord(signal.accounts);
-    if (accounts) {
-      for (const [accountId, value] of Object.entries(accounts)) {
-        const account = getRecord(value);
-        if (account) {
-          migrateSignalEndpoint(
-            account,
-            `channels.signal.accounts.${accountId}`,
-            changes,
-            inherited,
-          );
-        }
-      }
-    }
+    visitChannelEntries(raw, "signal", (entry, path) => {
+      migrateSignalEndpoint(entry, path, changes, inherited);
+    });
   }
   visitChannelEntries(raw, "googlechat", (entry, path) => {
     if (!Object.hasOwn(entry, "serviceAccountRef")) {
       return;
     }
-    if (entry.serviceAccount !== undefined) {
-      changes.push(
-        `Moved ${path}.serviceAccountRef → ${path}.serviceAccount (SecretRef precedence preserved).`,
-      );
-      entry.serviceAccount = entry.serviceAccountRef;
-      delete entry.serviceAccountRef;
-      return;
-    }
+    changes.push(
+      entry.serviceAccount !== undefined
+        ? `Moved ${path}.serviceAccountRef → ${path}.serviceAccount (SecretRef precedence preserved).`
+        : `Moved ${path}.serviceAccountRef → ${path}.serviceAccount.`,
+    );
     entry.serviceAccount = entry.serviceAccountRef;
     delete entry.serviceAccountRef;
-    changes.push(`Moved ${path}.serviceAccountRef → ${path}.serviceAccount.`);
   });
 }
 
@@ -358,19 +342,11 @@ function stripCompactionInstructionConfig(
   }
   let stripped = false;
   for (const key of ["customInstructions", "identifierInstructions"]) {
-    if (Object.hasOwn(compaction, key)) {
-      delete compaction[key];
-      stripped = true;
-    }
+    stripped = deleteRetiredPath(compaction, [key]) || stripped;
   }
   const memoryFlush = getRecord(compaction.memoryFlush);
-  if (memoryFlush) {
-    for (const key of ["prompt", "systemPrompt"]) {
-      if (Object.hasOwn(memoryFlush, key)) {
-        delete memoryFlush[key];
-        stripped = true;
-      }
-    }
+  for (const key of ["prompt", "systemPrompt"]) {
+    stripped = deleteRetiredPath(memoryFlush, [key]) || stripped;
   }
   if (compaction.identifierPolicy === "custom") {
     compaction.identifierPolicy = "strict";

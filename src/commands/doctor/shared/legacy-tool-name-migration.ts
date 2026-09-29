@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { normalizeToolPolicyName } from "../../../agents/tool-policy-shared.js";
+import { visitConfigValueTree } from "../../../config/value-tree.js";
 import { isToolPolicyPath } from "./legacy-tool-policy-scopes.js";
 
 type LegacyToolNameMigration = {
@@ -65,41 +66,35 @@ export function migrateLegacyToolNameList(
   return mutated;
 }
 
-function visitLegacyToolName(
+function collectLegacyToolNamePaths(
   value: unknown,
   path: string[],
   migration: LegacyToolNameMigration,
   migrate: boolean,
-  matchedPaths: string[],
-): void {
-  if (Array.isArray(value)) {
-    for (const [index, entry] of value.entries()) {
-      visitLegacyToolName(entry, [...path, String(index)], migration, migrate, matchedPaths);
-    }
-    return;
-  }
-  if (!isRecord(value)) {
-    return;
-  }
-
-  const listKeys = isToolPolicyPath(path) ? ["allow", "alsoAllow", "deny"] : [];
-  if (Object.hasOwn(value, "toolsAllow")) {
-    listKeys.push("toolsAllow");
-  }
-  for (const key of listKeys) {
-    const list = value[key];
-    if (!hasLegacyToolNameList(list, migration)) {
-      continue;
-    }
-    matchedPaths.push([...path, key].join("."));
-    if (migrate) {
-      migrateLegacyToolNameList(list, migration);
-    }
-  }
-
-  for (const [key, entry] of Object.entries(value)) {
-    visitLegacyToolName(entry, [...path, key], migration, migrate, matchedPaths);
-  }
+): string[] {
+  const matchedPaths: string[] = [];
+  visitConfigValueTree(
+    value,
+    (candidate, currentPath) => {
+      if (isRecord(candidate)) {
+        const listKeys = isToolPolicyPath(currentPath) ? ["allow", "alsoAllow", "deny"] : [];
+        if (Object.hasOwn(candidate, "toolsAllow")) {
+          listKeys.push("toolsAllow");
+        }
+        for (const key of listKeys) {
+          const matched = migrate
+            ? migrateLegacyToolNameList(candidate[key], migration)
+            : hasLegacyToolNameList(candidate[key], migration);
+          if (matched) {
+            matchedPaths.push([...currentPath, key].join("."));
+          }
+        }
+      }
+      return true;
+    },
+    path,
+  );
+  return matchedPaths;
 }
 
 export function findLegacyToolNamePaths(
@@ -107,9 +102,7 @@ export function findLegacyToolNamePaths(
   migration: LegacyToolNameMigration,
   path: string[] = [],
 ): string[] {
-  const matchedPaths: string[] = [];
-  visitLegacyToolName(value, path, migration, false, matchedPaths);
-  return matchedPaths;
+  return collectLegacyToolNamePaths(value, path, migration, false);
 }
 
 export function migrateLegacyToolNamePolicies(
@@ -117,7 +110,5 @@ export function migrateLegacyToolNamePolicies(
   migration: LegacyToolNameMigration,
   path: string[] = [],
 ): string[] {
-  const matchedPaths: string[] = [];
-  visitLegacyToolName(value, path, migration, true, matchedPaths);
-  return matchedPaths;
+  return collectLegacyToolNamePaths(value, path, migration, true);
 }

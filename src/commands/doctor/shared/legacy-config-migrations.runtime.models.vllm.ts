@@ -176,17 +176,12 @@ export function createVllmModelTargets(
   raw: Record<string, unknown>,
   modelIds: string[],
 ): Array<{ model: Record<string, unknown>; index: number }> {
-  const targets: Array<{ model: Record<string, unknown>; index: number }> = [];
-  const seen = new Set<Record<string, unknown>>();
-  for (const modelId of modelIds) {
-    const target = findOrCreateVllmModelEntry(raw, modelId);
-    if (!target || seen.has(target.model)) {
-      continue;
-    }
-    seen.add(target.model);
-    targets.push(target);
-  }
-  return targets;
+  return combineVllmModelTargets(
+    modelIds.flatMap((modelId) => {
+      const target = findOrCreateVllmModelEntry(raw, modelId);
+      return target ? [target] : [];
+    }),
+  );
 }
 
 export function combineVllmModelTargets(

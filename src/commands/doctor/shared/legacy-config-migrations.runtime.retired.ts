@@ -23,7 +23,11 @@ import {
 } from "./legacy-config-migrations.runtime.retired-media.js";
 import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
-import { visitAgentConfigScopes, visitChannelEntries } from "./legacy-config-record-shared.js";
+import {
+  deleteRetiredPath,
+  visitAgentConfigScopes,
+  visitChannelEntries,
+} from "./legacy-config-record-shared.js";
 
 const rule = (
   path: string[],
@@ -288,8 +292,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     "bootstrapPromptTruncationWarning",
     "mediaGenerationAutoProviderFallback",
   ]) {
-    if (defaults && Object.hasOwn(defaults, key)) {
-      delete defaults[key];
+    if (deleteRetiredPath(defaults, [key])) {
       changes.push(`Removed agents.defaults.${key}; built-in behavior now applies.`);
     }
   }
@@ -317,21 +320,18 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
   }
 
   const attachments = getRecord(raw.attachments);
-  if (attachments && Object.hasOwn(attachments, "preserveFilenames")) {
-    delete attachments.preserveFilenames;
+  if (deleteRetiredPath(attachments, ["preserveFilenames"])) {
     changes.push("Removed attachments.preserveFilenames; temp-safe names now always apply.");
   }
   const browser = getRecord(raw.browser);
-  if (browser && Object.hasOwn(browser, "color")) {
-    delete browser.color;
+  if (deleteRetiredPath(browser, ["color"])) {
     changes.push("Removed browser.color; the built-in color now applies.");
   }
   const profiles = getRecord(browser?.profiles);
   if (profiles) {
     for (const [profileId, value] of Object.entries(profiles)) {
       const profile = getRecord(value);
-      if (profile && Object.hasOwn(profile, "color")) {
-        delete profile.color;
+      if (deleteRetiredPath(profile, ["color"])) {
         changes.push(`Removed browser.profiles.${profileId}.color.`);
       }
     }
@@ -340,8 +340,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
   visitChannelEntries(raw, "discord", (entry, path) => {
     const autoPresence = getRecord(entry.autoPresence);
     for (const key of ["healthyText", "degradedText", "exhaustedText"]) {
-      if (autoPresence && Object.hasOwn(autoPresence, key)) {
-        delete autoPresence[key];
+      if (deleteRetiredPath(autoPresence, [key])) {
         changes.push(`Removed ${path}.autoPresence.${key}.`);
       }
     }
@@ -361,12 +360,10 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
 
   const messages = getRecord(raw.messages);
   const statusReactions = getRecord(messages?.statusReactions);
-  if (statusReactions && Object.hasOwn(statusReactions, "emojis")) {
-    delete statusReactions.emojis;
+  if (deleteRetiredPath(statusReactions, ["emojis"])) {
     changes.push("Removed messages.statusReactions.emojis; curated defaults now apply.");
   }
-  if (messages && Object.hasOwn(messages, "removeAckAfterReply")) {
-    delete messages.removeAckAfterReply;
+  if (deleteRetiredPath(messages, ["removeAckAfterReply"])) {
     changes.push("Removed messages.removeAckAfterReply; acknowledgements are retained.");
   }
 
@@ -377,8 +374,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
   visitChannelEntries(raw, "slack", (entry, path) => {
     const socketMode = getRecord(entry.socketMode);
     for (const key of ["clientPingTimeout", "serverPingTimeout", "pingPongLoggingEnabled"]) {
-      if (socketMode && Object.hasOwn(socketMode, key)) {
-        delete socketMode[key];
+      if (deleteRetiredPath(socketMode, [key])) {
         changes.push(`Removed ${path}.socketMode.${key}.`);
       }
     }
@@ -387,16 +383,14 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     }
   });
   visitChannelEntries(raw, "imessage", (entry, path) => {
-    if (Object.hasOwn(entry, "coalesceSameSenderDms")) {
-      delete entry.coalesceSameSenderDms;
+    if (deleteRetiredPath(entry, ["coalesceSameSenderDms"])) {
       changes.push(`Removed ${path}.coalesceSameSenderDms.`);
     }
   });
 
   const commands = getRecord(raw.commands);
   for (const key of ["ownerDisplay", "ownerDisplaySecret"]) {
-    if (commands && Object.hasOwn(commands, key)) {
-      delete commands[key];
+    if (deleteRetiredPath(commands, [key])) {
       changes.push(`Removed commands.${key}; owner ids now render raw.`);
     }
   }
@@ -422,8 +416,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     changes.push("Mapped logging.consoleStyle compact → pretty.");
   }
   const controlUi = getRecord(gateway?.controlUi);
-  if (controlUi && Object.hasOwn(controlUi, "chatMessageMaxWidth")) {
-    delete controlUi.chatMessageMaxWidth;
+  if (deleteRetiredPath(controlUi, ["chatMessageMaxWidth"])) {
     changes.push("Removed gateway.controlUi.chatMessageMaxWidth; chat width is now browser-local.");
   }
 }
@@ -491,13 +484,11 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
     ],
     apply: (raw, changes) => {
       const messages = getRecord(raw.messages);
-      if (!messages || !Object.hasOwn(messages, "suppressToolErrors")) {
-        return;
+      if (deleteRetiredPath(messages, ["suppressToolErrors"])) {
+        changes.push(
+          "Removed messages.suppressToolErrors (tool failure warnings now appear only when a run ends without a reply).",
+        );
       }
-      delete messages.suppressToolErrors;
-      changes.push(
-        "Removed messages.suppressToolErrors (tool failure warnings now appear only when a run ends without a reply).",
-      );
     },
   }),
   defineLegacyConfigMigration({
@@ -674,13 +665,11 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
     ],
     apply: (raw, changes) => {
       migrateTruncateAfterCompaction(raw, changes);
-      if (Object.hasOwn(raw, "tui")) {
-        delete raw.tui;
+      if (deleteRetiredPath(raw, ["tui"])) {
         changes.push("Removed retired tui config; the footer uses the default compact display.");
       }
       const commands = getRecord(raw.commands);
-      if (commands && Object.hasOwn(commands, "modelsWrite")) {
-        delete commands.modelsWrite;
+      if (deleteRetiredPath(commands, ["modelsWrite"])) {
         changes.push("Removed retired commands.modelsWrite.");
       }
       const messages = getRecord(raw.messages);
@@ -697,8 +686,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         delete messages.messagePrefix;
       }
       const media = getRecord(getRecord(raw.tools)?.media);
-      if (media && Object.hasOwn(media, "asyncCompletion")) {
-        delete media.asyncCompletion;
+      if (deleteRetiredPath(media, ["asyncCompletion"])) {
         changes.push("Removed retired tools.media.asyncCompletion.directSend.");
       }
       migrateMessageCrossContext(raw, changes);
