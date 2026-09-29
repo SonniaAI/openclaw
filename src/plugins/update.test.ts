@@ -2418,6 +2418,39 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("does not fall back to npm for blocked official ClawHub artifact downloads", async () => {
+    const installPath = createInstalledPackageDir("@openclaw/discord", "2026.5.12");
+    const config = createClawHubInstallConfig({
+      pluginId: "discord",
+      installPath,
+      clawhubPackage: "@openclaw/discord",
+    });
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: false,
+      code: "clawhub_download_blocked",
+      error: "ClawHub blocked this release; update was not started.",
+      version: "2026.5.16-beta.5",
+    });
+
+    const result = await updatePlugin(config, "discord", {
+      updateChannel: "beta",
+      disableOnFailure: true,
+    });
+
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/discord@beta");
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.outcomes).toMatchObject([
+      {
+        pluginId: "discord",
+        status: "skipped",
+        code: "clawhub_download_blocked",
+        currentVersion: "2026.5.12",
+      },
+    ]);
+  });
+
   it("disables a blocked ClawHub plugin without changing trust policy", async () => {
     const warn = vi.fn();
     installPluginFromClawHubMock.mockResolvedValue({
