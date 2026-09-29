@@ -6,6 +6,7 @@ import {
   resolveShutdownReserveMs,
   resolveSupervisorExitMarginMs,
 } from "../../infra/gateway-shutdown-budget.js";
+import { GATEWAY_RESTART_DRAIN_FLOOR_MS } from "../../infra/restart-budget.js";
 import { readLaunchdStopTimeout } from "../../infra/launchd-stop-timeout.js";
 import { readSystemdStopTimeout } from "../../infra/systemd-stop-timeout.js";
 import type { GatewayRunSignalAction } from "./run-loop-request.js";
@@ -133,15 +134,25 @@ export function resolveGatewayShutdownDrainBudget(params: {
   restartWithoutSupervisor: boolean;
   acceptedAtMs: number;
   requestedRestartDrainTimeoutMs?: number;
+  // SON-4330: forced-restart decision point (deferral timeout). When present,
+  // the drain budget is measured from here instead of reload acceptance so a
+  // deferred restart still receives its full cleanup budget.
+  drainBudgetStartAtMs?: number;
 }) {
   const { budget, action } = params;
   const isRestart = action !== "stop";
   const requested = params.requestedRestartDrainTimeoutMs;
-  const elapsedMs = performance.now() - params.acceptedAtMs;
+  const elapsedMs = performance.now() - (params.drainBudgetStartAtMs ?? params.acceptedAtMs);
   const remaining = requested === undefined ? undefined : Math.max(0, requested - elapsedMs);
+  const floorMs = params.forceRestart ? GATEWAY_RESTART_DRAIN_FLOOR_MS : 0;
   const restartDrainTimeoutMs = budget.nativeStopBudget
-    ? Math.min(remaining ?? Infinity, Math.max(0, budget.timeoutMs - budget.reserveMs))
-    : remaining;
+    ? Math.max(
+        floorMs,
+        Math.min(remaining ?? Infinity, Math.max(0, budget.timeoutMs - budget.reserveMs)),
+      )
+    : remaining === undefined
+      ? undefined
+      : Math.max(floorMs, remaining);
   const restartDrainDeadlineAt =
     isRestart && restartDrainTimeoutMs !== undefined
       ? Date.now() + restartDrainTimeoutMs

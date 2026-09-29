@@ -715,7 +715,12 @@ export async function runGatewayLoop(params: {
       }
       shutdownDeadline = performance.now() + forceExitMs;
       forceExitTimer = setTimeout(() => {
-        const exitOk = budget.nativeStopBudget && !restartWithoutSupervisor && !shutdownFailure;
+        // A forced restart (deferral timed out) is a deliberate failover: the
+        // supervisor's replacement owns recovery, so the deadline stop is
+        // clean (exit 0) when no real shutdown failure occurred (SON-4330).
+        const exitOk =
+          (budget.nativeStopBudget && !restartWithoutSupervisor && !shutdownFailure) ||
+          Boolean(isRestart && restartIntent?.force && !shutdownFailure);
         gatewayLog.warn(
           `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; cleanup incomplete; exitCode=${exitOk ? 0 : 1}`,
         );
@@ -780,6 +785,7 @@ export async function runGatewayLoop(params: {
         forceRestart: Boolean(restartIntent?.force || restartIntent?.drainBudgetExhausted),
         restartWithoutSupervisor,
         acceptedAtMs: acceptedRequest.acceptedAtMs,
+        drainBudgetStartAtMs: restartIntent?.drainBudgetStartAtMs,
         requestedRestartDrainTimeoutMs: isRestart
           ? eagerLifecycleRuntime.resolveGatewayRestartDrainTimeoutMs(restartIntent)
           : 0,

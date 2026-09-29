@@ -11,7 +11,10 @@ import {
   type GatewayRestartSignalAdmissionLease,
 } from "../process/gateway-work-admission.js";
 import { formatErrorMessage } from "./errors.js";
-import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
+import {
+  resolveEnvGatewayRestartDeferralTimeoutMs,
+  resolveGatewayRestartDeferralTimeoutMs,
+} from "./restart-budget.js";
 import { type GatewayRestartIntent, normalizeRestartIntentReason } from "./restart-intent.js";
 import {
   GatewayRestartRequest,
@@ -123,7 +126,9 @@ function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
         });
         return;
       }
-      const deferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs();
+      const deferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs(
+        resolveEnvGatewayRestartDeferralTimeoutMs(),
+      );
       deferGatewayRestartUntilIdle(
         {
           getPendingCount: pendingCheck,
@@ -733,7 +738,15 @@ export function deferGatewayRestartUntilIdle(
     void emitPreparedGatewayRestart(
       opts.emitHooks,
       opts.reason,
-      timedOut ? { ...opts.timeoutIntent, drainBudgetExhausted: true } : undefined,
+      timedOut
+        ? {
+            ...opts.timeoutIntent,
+            drainBudgetExhausted: true,
+            // Budget starts at the forced-restart decision point, not reload
+            // acceptance (SON-4330): the deferral already spent its own wait.
+            drainBudgetStartAtMs: Date.now(),
+          }
+        : undefined,
       {
         finalIdleCheck: timedOut
           ? undefined
