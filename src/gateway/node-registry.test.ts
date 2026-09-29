@@ -1116,6 +1116,7 @@ describe("gateway/node-registry", () => {
     expect(forwarded.timeoutMs).toBeNull();
     await vi.advanceTimersByTimeAsync(1);
     await expect(invoke).resolves.toEqual(timedOut);
+    expectCancellation(frames, request.id);
 
     await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
     expect(authorizeRun(registry, { runId: "run-timeout" })).toBe(true);
@@ -1540,7 +1541,10 @@ describe("gateway/node-registry", () => {
     await expect(invoke).resolves.toEqual(idleTimedOut);
   });
 
-  it.each([{ clientId: GATEWAY_CLIENT_IDS.NODE_HOST, command: "mcp.tools.call.v1" }])(
+  it.each([
+    { clientId: GATEWAY_CLIENT_IDS.NODE_HOST, command: "mcp.tools.call.v1" },
+    { clientId: GATEWAY_CLIENT_IDS.MACOS_APP, command: "system.run" },
+  ])(
     "forwards cancellation of first-party non-streaming $clientId $command calls",
     async ({ clientId, command }) => {
       const registry = createNodeRegistry();

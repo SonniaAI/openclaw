@@ -313,6 +313,32 @@ describe("Client.handleInteraction native command channel identity", () => {
     },
   );
 
+  it.each(["sender", "parent", "identity"] as const)(
+    "denies raw picker selection with denied %s",
+    async (denial) => {
+      const harness = createHarness();
+      const interaction = pickerPayload(
+        denial === "parent" ? THREAD : CHANNEL,
+        "reset",
+        denial === "sender" ? "100000000000000099" : USER,
+      );
+      if (denial === "parent") {
+        denyThreadParent(harness);
+      }
+      if (denial === "identity") {
+        Reflect.deleteProperty(interaction, "channel_id");
+      }
+      await harness.client.handleInteraction(interaction);
+      expect(harness.dispatch).not.toHaveBeenCalled();
+      expect(JSON.stringify(harness.post.mock.calls)).toContain(
+        "Failed to apply test-provider/test-model",
+      );
+      expect(JSON.stringify(harness.post.mock.calls)).toContain(
+        denial === "sender" ? "not authorized" : "not allowed",
+      );
+    },
+  );
+
   it.each(["status", "autocomplete", "picker"] as const)(
     "denies raw %s when policy changes during the channel fetch",
     async (surface) => {

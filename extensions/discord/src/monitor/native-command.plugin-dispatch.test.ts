@@ -556,29 +556,39 @@ describe("Discord native plugin command dispatch", () => {
     });
   });
 
-  it("does not treat Discord DM allowlist users as scoped plugin command owners", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          dm: { enabled: true },
-          dmPolicy: "open",
-          allowFrom: ["user:owner"],
+  it.each([
+    { sender: "DM allowlist users", allowFrom: ["user:owner"], userId: "owner" },
+    {
+      sender: "authorized non-owners",
+      allowFrom: ["*"],
+      userId: "authorized-non-owner",
+    },
+  ])(
+    "does not treat Discord $sender as scoped plugin command owners",
+    async ({ allowFrom, userId }) => {
+      const cfg = {
+        channels: {
+          discord: {
+            dm: { enabled: true },
+            dmPolicy: "open",
+            allowFrom,
+          },
         },
-      },
-    } as OpenClawConfig;
-    const interaction = createInteraction();
-    interaction.options.getString.mockReturnValue("now");
-    const handler = registerScopedPairPlugin();
-    const command = await createPluginCommand({ cfg, name: "pair" });
+      } as OpenClawConfig;
+      const interaction = createInteraction({ userId });
+      interaction.options.getString.mockReturnValue("now");
+      const handler = registerScopedPairPlugin();
+      const command = await createPluginCommand({ cfg, name: "pair" });
 
-    await command.run(interaction);
+      await command.run(interaction);
 
-    expect(handler).not.toHaveBeenCalled();
-    expectFollowUpFields(interaction, {
-      content: "⚠️ This command requires gateway scope: operator.pairing.",
-    });
-    expect(interaction.reply).not.toHaveBeenCalled();
-  });
+      expect(handler).not.toHaveBeenCalled();
+      expectFollowUpFields(interaction, {
+        content: "⚠️ This command requires gateway scope: operator.pairing.",
+      });
+      expect(interaction.reply).not.toHaveBeenCalled();
+    },
+  );
 
   it("allows generic command owners to run scoped Discord plugin commands without gateway scopes", async () => {
     const cfg = {

@@ -151,6 +151,27 @@ function captureRetry(agent: AcpGatewayAgent, approvalId: string): () => Promise
 }
 
 describe("ACP translator permission relay", () => {
+  it.each(["allow-always", "deny"] as const)(
+    "relays an explicit %s selection to Gateway approval resolution",
+    async (decision) => {
+      const harness = await createHarness({
+        requestPermission: vi.fn(async () => ({
+          outcome: { outcome: "selected", optionId: decision },
+        })),
+      });
+      try {
+        await harness.agent.handleGatewayEvent(approval(harness.runId));
+        await vi.waitFor(() => {
+          expect(resolveCalls(harness.request)).toEqual([
+            ["exec.approval.resolve", { id: "approval-1", decision }],
+          ]);
+        });
+      } finally {
+        await harness.cleanup();
+      }
+    },
+  );
+
   it("relays raw approval requests once before the later agent approval event", async () => {
     const harness = await createHarness();
     await harness.agent.handleGatewayEvent(rawApproval("approval-raw"));

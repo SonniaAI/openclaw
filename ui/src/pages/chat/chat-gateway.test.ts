@@ -1256,6 +1256,54 @@ describe("handleChatGatewayEvent", () => {
     });
   });
 
+  it.each([
+    {
+      name: "canonical persisted assistant identities",
+      sourceMetadata: { id: "message-tool-source-reply", seq: 7 },
+      finalMetadata: { id: "automatic-final-reply", seq: 8 },
+    },
+    {
+      name: "legacy assistant replies without transcript metadata",
+      sourceMetadata: undefined,
+      finalMetadata: undefined,
+    },
+  ])(
+    "deduplicates the second distinct same-run final with $name",
+    ({ sourceMetadata, finalMetadata }) => {
+      const state = createState({ sessionKey: "main", chatRunId: "run-message-tool" });
+      const sourceReply = textMessage(
+        "assistant",
+        "Visible progress from the targetless message tool.",
+        sourceMetadata,
+      );
+      const automaticReply = textMessage(
+        "assistant",
+        "Visible automatic final reply.",
+        finalMetadata,
+      );
+      const sourceEvent = {
+        runId: "run-message-tool",
+        sessionKey: "main",
+        state: "final" as const,
+        message: sourceReply,
+      };
+      const finalEvent = {
+        runId: "run-message-tool",
+        sessionKey: "main",
+        state: "final" as const,
+        message: automaticReply,
+      };
+
+      expect(handleChatGatewayEvent(state, sourceEvent)).toBe("final");
+      expect(handleChatGatewayEvent(state, finalEvent)).toBe("final");
+      expect(handleChatGatewayEvent(state, finalEvent)).toBe("final");
+
+      expect(state.chatMessages).toEqual([sourceReply, automaticReply]);
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatStream).toBeNull();
+    },
+  );
+
   it("does not label a newer response with a completed run's late error", () => {
     const state = createState({ chatRunId: "run-completed" });
 
@@ -1550,6 +1598,46 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatEffectiveQueueMode).toBe("interrupt");
   });
 
+  it("omits literal global agentId until selected/default agent is known", async () => {
+    const { request, state } = createResolvedHistoryState(
+      { messages: [] },
+      {
+        sessionKey: "global",
+      },
+    );
+
+    await loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.not.objectContaining({ agentId: expect.anything() }),
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
+  it("uses hello default agent for literal global history before agents list loads", async () => {
+    const { request, state } = createResolvedHistoryState(
+      { messages: [] },
+      {
+        sessionKey: "global",
+        hello: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: [] },
+          snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+        },
+      },
+    );
+
+    await loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
   it("caches global history under the selected agent only", async () => {
     const messages = [textMessage("assistant", "work history")];
     const { state } = createResolvedHistoryState(
@@ -1597,6 +1685,70 @@ describe("loadChatHistory filtering", () => {
 
     expect(firstState.chatMessages).toEqual([textMessage("assistant", "shared")]);
     expect(secondState.chatMessages).toEqual(firstState.chatMessages);
+  });
+  it("keeps startup requests separate for different pane sessions", async () => {
+    const request = vi.fn().mockResolvedValue({ messages: [] });
+    const client = createTestClient(request);
+    const firstState = createHistoryStateForClient(client, { sessionKey: "agent:main:first" });
+    const secondState = createHistoryStateForClient(client, {
+      sessionKey: "agent:main:second",
+      sessions: firstState.sessions,
+    });
+
+    await Promise.all([
+      loadChatHistory(firstState, { startup: true }),
+      loadChatHistory(secondState, { startup: true }),
+    ]);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith(
+      "chat.startup",
+      {
+        sessionKey: "agent:main:first",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(request).toHaveBeenCalledWith(
+      "chat.startup",
+      {
+        sessionKey: "agent:main:second",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
+  it("keeps startup requests separate across pane connection epochs", async () => {
+    const staleStartup = createDeferred<HistoryResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleStartup.promise)
+      .mockResolvedValueOnce(createAssistantHistory("fresh"));
+    const client = createTestClient(request);
+    const staleState = createHistoryStateForClient(client, {
+      connectionEpoch: 1,
+      sessionKey: "agent:main:main",
+    });
+    const freshState = createHistoryStateForClient(client, {
+      connectionEpoch: 2,
+      sessionKey: "agent:main:main",
+      sessions: staleState.sessions,
+    });
+
+    const staleLoad = loadChatHistory(staleState, { startup: true });
+    const freshLoad = loadChatHistory(freshState, { startup: true });
+
+    expect(request).toHaveBeenCalledTimes(2);
+    await freshLoad;
+    staleStartup.resolve(createAssistantHistory("stale"));
+    await staleLoad;
+
+    expect(freshState.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh" }] },
+    ]);
   });
 });
 

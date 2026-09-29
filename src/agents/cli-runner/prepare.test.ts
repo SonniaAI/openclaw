@@ -3763,23 +3763,35 @@ describe("prepareCliRunContext", () => {
     expect(cleanupScope.outcome).toBe("uncertain");
   });
 
-  it("still rejects disableTools when a selectable backend cannot enforce an exact cap", async () => {
-    setRawCliBackendForPrepareTest({
-      id: "selectable-cli",
-      pluginId: "selectable-plugin",
-      nativeToolMode: "selectable",
-      config: createJsonlStdinBackendConfig("selectable-cli"),
-    });
+  it.each(["selectable", "always-on"] as const)(
+    "rejects disableTools before initializing MCP when a %s backend cannot disable native tools",
+    async (nativeToolMode) => {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "synthetic-loopback-owner",
+        nonOwnerToken: "synthetic-loopback-non-owner",
+      }));
+      setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
+      setRawCliBackendForPrepareTest({
+        id: "native-cli",
+        pluginId: "native-plugin",
+        bundleMcp: true,
+        bundleMcpMode: "codex-config-overrides",
+        nativeToolMode,
+        config: createJsonlStdinBackendConfig("native-cli"),
+      });
 
-    await expect(
-      fixture.prepare({
-        provider: "selectable-cli",
-        disableTools: true,
-      }),
-    ).rejects.toThrow(
-      "CLI backend selectable-cli cannot run with tools disabled because it exposes native tools",
-    );
-  });
+      await expect(
+        fixture.prepare({
+          provider: "native-cli",
+          disableTools: true,
+        }),
+      ).rejects.toThrow(
+        "CLI backend native-cli cannot run with tools disabled because it exposes native tools",
+      );
+      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+    },
+  );
 
   it("privately forwards isolated-completion system prompts to bundled preparation", async () => {
     const { dir } = fixture.session;
@@ -5021,7 +5033,7 @@ describe("prepareCliRunContext", () => {
     expect(fs.existsSync(pluginDir)).toBe(false);
   });
 
-  it.each(["raw", "blocked", "cancelled", "foreign-maintenance"] as const)(
+  it.each(["raw", "compacted", "blocked", "cancelled", "foreign-maintenance"] as const)(
     "isolates %s caller memory through outer normalization and real CLI execution",
     async (scenario) => {
       const { dir, sessionTarget: fixtureTarget } = fixture.session;
@@ -5034,8 +5046,11 @@ describe("prepareCliRunContext", () => {
       const eventsBefore = loadTranscriptEventsSync(fixtureTarget);
       const entryBefore = loadSessionEntryReadOnly(fixtureTarget);
       const sessionManager = SessionManager.inMemory(dir);
-      if (scenario === "raw") {
-        sessionManager.appendMessage(makeUserMessage("OWNED_RETAINED", 1));
+      if (scenario === "raw" || scenario === "compacted") {
+        const kept = sessionManager.appendMessage(makeUserMessage("OWNED_RETAINED", 1));
+        if (scenario === "compacted") {
+          sessionManager.appendCompaction("OWNED_SUMMARY", kept, 1000);
+        }
         sessionManager.appendMessage({ role: "user", content: "OWNED_TAIL", timestamp: 2 });
       }
       const memoryBefore = structuredClone(sessionManager.getEntries());
@@ -5219,10 +5234,10 @@ describe("prepareCliRunContext", () => {
           expect(input.sessionFile).toBe(`in-memory:${sessionManager.getSessionId()}`);
           expect(input.runtimeContext?.sessionTarget).toBeUndefined();
         }
-        if (scenario === "raw") {
+        if (scenario === "raw" || scenario === "compacted") {
           expect(bootstrap).toHaveBeenCalledOnce();
           const finalized = afterTurn.mock.calls[0]?.[0];
-          expect(finalized?.prePromptMessageCount).toBe(2);
+          expect(finalized?.prePromptMessageCount).toBe(scenario === "compacted" ? 3 : 2);
           expect(JSON.stringify(finalized?.messages)).toContain("OWNED_RETAINED");
           expect(JSON.stringify(finalized?.messages)).toContain("OWNED_TAIL");
           expect(JSON.stringify(finalized?.messages)).not.toContain("BORROWED_");
@@ -5240,9 +5255,12 @@ describe("prepareCliRunContext", () => {
           expect(outgoing[0]?.prompt).not.toContain("BORROWED_");
           expect(outgoing[0]?.useResume).toBe(false);
           expect(sessionManager.getEntries()).toEqual(memoryBefore);
-          if (scenario === "raw") {
+          if (scenario === "raw" || scenario === "compacted") {
             expect(outgoing[0]?.prompt).toContain("OWNED_RETAINED");
             expect(outgoing[0]?.prompt).toContain("OWNED_TAIL");
+            if (scenario === "compacted") {
+              expect(outgoing[0]?.prompt).toContain("OWNED_SUMMARY");
+            }
           } else {
             expect(outgoing[0]?.prompt).toBe("owned next ask");
           }

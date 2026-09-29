@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
@@ -240,6 +241,43 @@ describe("mixed inline directives", () => {
 
     await applyMixedDirectives(selection);
     expect(lifecycleEvents).toHaveLength(1);
+  });
+
+  it("adopts an authoritative model lock and emits no losing side effects", async () => {
+    const sessionEntry = createSessionEntry({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "user",
+    });
+    const lockedEntry = { ...sessionEntry, updatedAt: 2, modelSelectionLocked: true };
+    persistenceMocks.persist.mockResolvedValueOnce({
+      status: "model-selection-locked",
+      entry: lockedEntry,
+    });
+
+    const { result, sessionStore } = await applyMixedDirectives({
+      body: "please reply /model openai/gpt-5.6-luna",
+      sessionEntry,
+      storePath: "/tmp/sessions.json",
+      allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
+      senderIsOwner: true,
+    });
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
+      preRunRejection: "session-directive-rejected",
+    });
+    expect(persistenceMocks.persist).toHaveBeenCalledWith(
+      expect.objectContaining({ requireModelSelectionUnlocked: true }),
+    );
+    expect(sessionEntry).toEqual(lockedEntry);
+    expect(sessionStore["agent:main:dm:1"]).toEqual(lockedEntry);
+    expect(lifecycleEvents).toEqual([]);
+    expect(triggerSessionPatchHook).not.toHaveBeenCalled();
+    expect(refreshQueuedFollowupSession).not.toHaveBeenCalled();
+    expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("persists a directive-only reasoning setting and publishes the committed change", async () => {
