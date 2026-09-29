@@ -36,29 +36,17 @@ type AcquireCronScriptMcpToolsParams = {
 };
 
 /**
- * Starts the evaluation's own session MCP runtime for the servers its
- * toolsAllow names by prefix (`server__tool` or `server__*`). Wildcards,
- * absent caps, and unprefixed globs start nothing: scripts may poll every
- * 30 seconds, so each server they connect must be an explicit choice.
- * Connection and listing run inside the caller's deadline; `dispose` must run
- * in the caller's `finally`.
+ * Starts the evaluation's own session MCP runtime for the configured servers
+ * whose safe name its toolsAllow uses as a prefix (`server__tool` or
+ * `server__*`). Wildcards, absent caps, and unprefixed globs start nothing:
+ * scripts may poll every 30 seconds, so each server they connect must be an
+ * explicit choice. Connection and listing run inside the caller's deadline;
+ * `dispose` must run in the caller's `finally`.
  */
 export function acquireCronScriptMcpTools(
   params: AcquireCronScriptMcpToolsParams,
 ): CronScriptMcpTools | undefined {
-  const namedSafeServers = new Set<string>();
-  for (const entry of params.toolsAllow ?? []) {
-    const name = normalizeToolPolicyName(entry);
-    const separator = name.indexOf(TOOL_NAME_SEPARATOR);
-    const server = separator > 0 ? name.slice(0, separator) : "";
-    const tool = separator > 0 ? name.slice(separator + TOOL_NAME_SEPARATOR.length) : "";
-    if (server && tool && !server.includes("*")) {
-      namedSafeServers.add(server);
-    }
-  }
-  if (namedSafeServers.size === 0) {
-    return undefined;
-  }
+  const allowed = (params.toolsAllow ?? []).map(normalizeToolPolicyName);
   const explicitToolDenylist = params.capabilityProfile.policy.explicitToolDenylist;
   // Metadata only: no transport starts until acquisition below.
   const { loaded, safeServerNamesByServer } = loadSessionMcpConfig({
@@ -71,7 +59,8 @@ export function acquireCronScriptMcpTools(
   let namedServerCount = 0;
   for (const serverName of Object.keys(loaded.mcpServers)) {
     const safeName = safeServerNamesByServer.get(serverName) ?? serverName;
-    if (namedSafeServers.has(normalizeToolPolicyName(safeName))) {
+    const prefix = `${normalizeToolPolicyName(safeName)}${TOOL_NAME_SEPARATOR}`;
+    if (allowed.some((entry) => entry.length > prefix.length && entry.startsWith(prefix))) {
       namedServerCount += 1;
     } else {
       // Whole-namespace denials exclude a server before discovery, keeping safe names stable.
@@ -102,12 +91,6 @@ export function acquireCronScriptMcpTools(
     }),
   );
   const surface = materialization.then((materialized) => {
-    const unavailable = materialized.diagnostics
-      ?.map(({ serverName, message }) => `MCP server "${serverName}" is unavailable: ${message}`)
-      .join("; ");
-    if (unavailable) {
-      return { tools: [], unavailable };
-    }
     const applyPolicy = (candidates: AnyAgentTool[]) =>
       applyFinalEffectiveToolPolicy({
         bundledTools: applyEmbeddedAttemptToolsAllow(candidates, params.toolsAllow, {
@@ -124,6 +107,9 @@ export function acquireCronScriptMcpTools(
       tools: applyPolicy(materialized.tools).map((tool) =>
         wrapToolWithBeforeToolCallHook(tool, params.hookContext),
       ),
+      unavailable: materialized.diagnostics
+        ?.map(({ serverName, message }) => `MCP server "${serverName}" is unavailable: ${message}`)
+        .join("; "),
     };
   });
   void surface.catch(() => undefined);

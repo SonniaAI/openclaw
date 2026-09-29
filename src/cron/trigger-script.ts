@@ -514,10 +514,13 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           if (!runtime.isCurrent()) {
             throw new PluginInstanceUnavailableError();
           }
-          const reservedToolNames = tools.map((tool) => tool.name);
-          mcp = withPluginRuntimeRegistryScope(selected.pluginRegistry, () =>
-            selected.acquireMcpTools?.(authority, reservedToolNames),
-          );
+          // A script that never names MCP cannot reach it, so it starts no server.
+          if (/\bMCP\b/.test(params.script)) {
+            const reservedToolNames = tools.map((tool) => tool.name);
+            mcp = withPluginRuntimeRegistryScope(selected.pluginRegistry, () =>
+              selected.acquireMcpTools?.(authority, reservedToolNames),
+            );
+          }
           break;
         } catch (error) {
           if (
@@ -541,13 +544,12 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           // Retry setup once with the same admission and deadline, never script execution.
         }
       }
+      let mcpUnavailable: string | undefined;
       if (mcp) {
         // Server connection and tool listing spend the evaluation's own deadline.
         const surface = await evaluationScope.wait(mcp.surface);
-        if (surface.unavailable) {
-          return scriptFailure(surface.unavailable, "runtime_unavailable");
-        }
         tools = [...tools, ...surface.tools];
+        mcpUnavailable = surface.unavailable;
       }
       const ctx: ToolSearchToolContext = {
         ...runtime.context,
@@ -600,7 +602,11 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           signal: evaluationScope.signal,
         });
         if (result.status === "failed") {
-          return scriptFailure(result.error, result.code);
+          // A failed server is absent from `MCP`; name why when the script fails.
+          return scriptFailure(
+            mcpUnavailable ? `${result.error} (${mcpUnavailable})` : result.error,
+            result.code,
+          );
         }
         assertActive();
         return { kind: "completed" as const, result };

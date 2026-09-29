@@ -67,6 +67,8 @@ function createMcpFixture(params: { extra?: Partial<OpenClawConfig>; serverArgs?
           command: process.execPath,
           args: [serverPath, startLog, ...(params.serverArgs ?? [])],
         },
+        // Safe server names may themselves contain the `__` separator.
+        team__sources: { command: process.execPath, args: [serverPath, startLog] },
         broken: { command: process.execPath, args: ["-e", "process.exit(3)"] },
       },
     },
@@ -135,35 +137,39 @@ describe("cron script MCP namespace", () => {
   );
 
   it("exposes a server-scoped glob within the owning agent's tool policy", async () => {
-    const fixture = createMcpFixture({ extra: { tools: { deny: ["sources__delete_source"] } } });
+    const fixture = createMcpFixture({
+      extra: { tools: { deny: ["team__sources__delete_source"] } },
+    });
     const runtime = createCronScriptRuntime({ config: fixture.config });
 
     await expect(
       runtime.evaluateTrigger({
         jobId: "mcp-server-glob",
-        script: QUIET_HOUR_SCRIPT,
+        script: QUIET_HOUR_SCRIPT.replaceAll("MCP.sources", "MCP.teamSources"),
         state: null,
-        toolsAllow: ["sources__*"],
+        toolsAllow: ["team__sources__*"],
       }),
     ).resolves.toMatchObject({
       kind: "evaluated",
       fire: false,
       state: { listed: { tool: "list_sources", since: "start" }, deleteVisible: false },
     });
+    expect(fixture.starts()).toBe(1);
   });
 
   it.each([
-    { caps: "a wildcard", toolsAllow: ["*"] },
-    { caps: "no toolsAllow", toolsAllow: undefined },
-    { caps: "an unprefixed glob", toolsAllow: ["sour*"] },
-  ])("starts no MCP server for $caps", async ({ toolsAllow }) => {
+    { caps: "a wildcard", toolsAllow: ["*"], script: "typeof MCP" },
+    { caps: "no toolsAllow", toolsAllow: undefined, script: "typeof MCP" },
+    { caps: "an unprefixed glob", toolsAllow: ["sour*"], script: "typeof MCP" },
+    { caps: "a script that never mentions it", toolsAllow: ["sources__*"], script: '"undefined"' },
+  ])("starts no MCP server for $caps", async ({ toolsAllow, script }) => {
     const fixture = createMcpFixture();
     const runtime = createCronScriptRuntime({ config: fixture.config });
 
     await expect(
       runtime.evaluateTrigger({
         jobId: "mcp-not-named",
-        script: "return { fire: false, state: typeof MCP };",
+        script: `return { fire: false, state: ${script} };`,
         state: null,
         toolsAllow,
       }),
@@ -172,17 +178,26 @@ describe("cron script MCP namespace", () => {
     expect(getSessionMcpRuntimeManagerForTesting().listRuntimeKeys()).toEqual([]);
   });
 
-  it("fails the evaluation before the script runs when a named server cannot start", async () => {
+  it("runs past a failed named server and names it when the script fails", async () => {
     const runtime = createCronScriptRuntime({ config: createMcpFixture().config });
+    const toolsAllow = ["sources__list_sources", "broken__*"];
 
+    await expect(
+      runtime.evaluateTrigger({
+        jobId: "mcp-broken",
+        script: QUIET_HOUR_SCRIPT,
+        state: null,
+        toolsAllow,
+      }),
+    ).resolves.toMatchObject({ kind: "evaluated", fire: false });
     const result = await runtime.evaluateTrigger({
       jobId: "mcp-broken",
-      script: "return { fire: true };",
+      script: "await MCP.broken.ping({}); return { fire: false };",
       state: null,
-      toolsAllow: ["broken__*"],
+      toolsAllow,
     });
 
-    expect(result).toMatchObject({ kind: "error", code: "runtime_unavailable" });
+    expect(result).toMatchObject({ kind: "error", code: "internal_error" });
     expect(result.kind === "error" ? result.error : "").toContain(
       'MCP server "broken" is unavailable',
     );
