@@ -29,10 +29,16 @@ export function resolveEnvGatewayRestartDeferralTimeoutMs(): number | undefined 
 export function resolveGatewayRestartDeferralTimeoutMs(): number;
 export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs: unknown): number | undefined;
 export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs?: unknown): number | undefined {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+  // No override: use the default. An explicit-but-invalid override resolves to
+  // undefined (never silently the default) so callers cannot accidentally
+  // stretch the deferral by passing malformed values (SON-4330).
+  if (timeoutMs === undefined) {
     return DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS;
   }
-  return timeoutMs > 0 ? Math.floor(timeoutMs) : undefined;
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined;
+  }
+  return Math.floor(timeoutMs);
 }
 
 export function resolveGatewayRestartDrainTimeoutMs(intent?: GatewayRestartIntent) {

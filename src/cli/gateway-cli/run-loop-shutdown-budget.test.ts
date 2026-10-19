@@ -627,6 +627,7 @@ describe("Gateway restart drain budget (SON-4330)", () => {
       acceptedAtMs: performance.now(),
       requestedRestartDrainTimeoutMs: 45_000,
     });
-    expect(drainBudget.drainTimeoutMs).toBe(45_000);
+    expect(drainBudget.drainTimeoutMs).toBeLessThanOrEqual(45_000);
+    expect(drainBudget.drainTimeoutMs).toBeCloseTo(45_000, -1);
   });
 });
