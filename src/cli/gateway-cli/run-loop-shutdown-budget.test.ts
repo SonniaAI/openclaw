@@ -4,6 +4,7 @@ import {
   GATEWAY_SHUTDOWN_RESERVE_MS,
   GATEWAY_SUPERVISOR_EXIT_MARGIN_MS,
 } from "../../infra/gateway-shutdown-budget.js";
+import { GATEWAY_RESTART_DRAIN_FLOOR_MS } from "../../infra/restart-budget.js";
 import {
   resolveGatewayShutdownBudget,
   resolveGatewayShutdownDrainBudget,
@@ -574,5 +575,59 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
     expect(execSystem).not.toHaveBeenCalled();
     expect(execUser).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("Gateway restart drain budget (SON-4330)", () => {
+  const makeBudget = () => ({
+    nativeStopBudget: false,
+    timeoutMs: 315_000,
+    reserveMs: 10_000,
+  });
+
+  it("measures a deferred forced restart from the forced-decision point, not reload acceptance", () => {
+    const acceptedAtMs = performance.now() - 300_463;
+    const drainBudgetStartAtMs = performance.now();
+    const drainBudget = resolveGatewayShutdownDrainBudget({
+      budget: makeBudget(),
+      action: "restart",
+      forceRestart: true,
+      restartWithoutSupervisor: false,
+      acceptedAtMs,
+      requestedRestartDrainTimeoutMs: 45_000,
+      drainBudgetStartAtMs,
+    });
+    // The deferral spent its own 300s wait; the restart still gets its full
+    // requested drain budget measured from the forced-restart decision point.
+    expect(drainBudget.drainTimeoutMs).toBeCloseTo(45_000, -1);
+    expect(drainBudget.restartDrainDeadlineAt).toBeGreaterThan(Date.now() + 30_000);
+  });
+
+  it("never hands a forced restart a 0ms drain budget (floor)", () => {
+    const acceptedAtMs = performance.now() - 300_463;
+    const drainBudget = resolveGatewayShutdownDrainBudget({
+      budget: makeBudget(),
+      action: "restart",
+      forceRestart: true,
+      restartWithoutSupervisor: false,
+      acceptedAtMs,
+      requestedRestartDrainTimeoutMs: 45_000,
+    });
+    expect(drainBudget.drainTimeoutMs).toBeGreaterThanOrEqual(GATEWAY_RESTART_DRAIN_FLOOR_MS);
+    expect(drainBudget.drainTimeoutMs).toBeGreaterThan(0);
+    expect(drainBudget.restartDrainDeadlineAt).toBeGreaterThan(Date.now());
+  });
+
+  it("leaves non-forced restart drain budgets unchanged", () => {
+    const drainBudget = resolveGatewayShutdownDrainBudget({
+      budget: makeBudget(),
+      action: "restart",
+      forceRestart: false,
+      restartWithoutSupervisor: false,
+      acceptedAtMs: performance.now(),
+      requestedRestartDrainTimeoutMs: 45_000,
+    });
+    expect(drainBudget.drainTimeoutMs).toBeLessThanOrEqual(45_000);
+    expect(drainBudget.drainTimeoutMs).toBeCloseTo(45_000, -1);
   });
 });

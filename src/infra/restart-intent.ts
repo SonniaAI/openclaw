@@ -68,6 +68,10 @@ export type GatewayRestartIntent = {
   waitMs?: number;
   // Only the in-process deferral owner can attest that the drain budget was spent.
   drainBudgetExhausted?: true;
+  // Process-local only: the forced-restart decision point (deferral timeout).
+  // The drain budget is measured from here, not from reload acceptance, so a
+  // deferred restart still receives its full cleanup budget (SON-4330).
+  drainBudgetStartAtMs?: number;
   // Process-local only: persisted restart requests cannot delegate successor ownership.
   successorOwner?: {
     kind: "managed-update-handoff";
