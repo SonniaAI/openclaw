@@ -587,7 +587,8 @@ describe("Gateway restart drain budget (SON-4330)", () => {
 
   it("measures a deferred forced restart from the forced-decision point, not reload acceptance", () => {
     const acceptedAtMs = performance.now() - 300_463;
-    const drainBudgetStartAtMs = performance.now();
+    // Production shape (SON-4345): the intent stamp is epoch wall-clock ms.
+    const drainBudgetStartAtMs = Date.now();
     const drainBudget = resolveGatewayShutdownDrainBudget({
       budget: makeBudget(),
       action: "restart",
@@ -629,5 +630,57 @@ describe("Gateway restart drain budget (SON-4330)", () => {
     });
     expect(drainBudget.drainTimeoutMs).toBeLessThanOrEqual(45_000);
     expect(drainBudget.drainTimeoutMs).toBeCloseTo(45_000, -1);
+  });
+});
+
+
+describe("Gateway restart drain budget clock domain (SON-4345)", () => {
+  const makeBudget = () => ({
+    nativeStopBudget: false,
+    timeoutMs: 315_000,
+    reserveMs: 10_000,
+  });
+
+  it("keeps the real 45s-class drain window when the intent stamp is Date.now() (production shape)", () => {
+    const acceptedAtMs = performance.now() - 300_463;
+    // Production shape (src/infra/restart.ts stamps Date.now() at the
+    // forced-restart decision point).
+    const drainBudgetStartAtMs = Date.now() - 5;
+    const drainBudget = resolveGatewayShutdownDrainBudget({
+      budget: makeBudget(),
+      action: "restart",
+      forceRestart: true,
+      restartWithoutSupervisor: false,
+      acceptedAtMs,
+      requestedRestartDrainTimeoutMs: 45_000,
+      drainBudgetStartAtMs,
+    });
+    // Pre-fix this consumed the epoch stamp as a performance.now() offset:
+    // elapsed ~ -1.79e12 -> remaining ~ 1792566089094ms (the drilled drain
+    // line) and the forced deadline stop fired ~4ms into the drain.
+    expect(drainBudget.drainTimeoutMs).toBeGreaterThan(0);
+    expect(drainBudget.drainTimeoutMs).toBeGreaterThanOrEqual(GATEWAY_RESTART_DRAIN_FLOOR_MS);
+    expect(drainBudget.drainTimeoutMs).toBeLessThanOrEqual(45_000);
+    expect(drainBudget.restartDrainDeadlineAt).toBeGreaterThan(
+      Date.now() + GATEWAY_RESTART_DRAIN_FLOOR_MS,
+    );
+    expect(drainBudget.restartDrainDeadlineAt).toBeLessThanOrEqual(Date.now() + 46_000);
+  });
+
+  it("still floors the budget when an epoch-stamped intent is already exhausted", () => {
+    const acceptedAtMs = performance.now() - 300_463;
+    const drainBudgetStartAtMs = Date.now() - 40_000;
+    const drainBudget = resolveGatewayShutdownDrainBudget({
+      budget: makeBudget(),
+      action: "restart",
+      forceRestart: true,
+      restartWithoutSupervisor: false,
+      acceptedAtMs,
+      requestedRestartDrainTimeoutMs: 45_000,
+      drainBudgetStartAtMs,
+    });
+    // 45s requested - ~40s spent (epoch domain) ~ 5s remaining -> floored to 15s.
+    expect(drainBudget.drainTimeoutMs).toBe(GATEWAY_RESTART_DRAIN_FLOOR_MS);
+    expect(drainBudget.drainTimeoutMs).toBeGreaterThan(0);
   });
 });
