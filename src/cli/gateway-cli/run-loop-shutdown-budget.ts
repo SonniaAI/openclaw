@@ -142,7 +142,17 @@ export function resolveGatewayShutdownDrainBudget(params: {
   const { budget, action } = params;
   const isRestart = action !== "stop";
   const requested = params.requestedRestartDrainTimeoutMs;
-  const elapsedMs = performance.now() - (params.drainBudgetStartAtMs ?? params.acceptedAtMs);
+  // SON-4345 clock-domain fix: drainBudgetStartAtMs is stamped with Date.now()
+  // (epoch wall-clock ms) by the restart intent, while acceptedAtMs is a
+  // performance.now() offset (ms since process start). Subtract like-for-like:
+  // epoch-to-epoch when the intent stamp is present, monotonic-to-monotonic
+  // otherwise. Mixing domains made elapsed ~ performance.now() - Date.now() ~
+  // -1.79e12ms, so remaining exploded to the drilled 1792566089094ms drain
+  // line and the forced deadline stop fired ~4ms in, abandoning in-flight work.
+  const elapsedMs =
+    params.drainBudgetStartAtMs !== undefined
+      ? Date.now() - params.drainBudgetStartAtMs
+      : performance.now() - params.acceptedAtMs;
   const remaining = requested === undefined ? undefined : Math.max(0, requested - elapsedMs);
   const floorMs = params.forceRestart ? GATEWAY_RESTART_DRAIN_FLOOR_MS : 0;
   const restartDrainTimeoutMs = budget.nativeStopBudget
