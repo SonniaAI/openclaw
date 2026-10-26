@@ -61,6 +61,11 @@ import {
   appendCronRunInspectionLink,
   normalizeDirectCronDeliveryPayloads,
 } from "./delivery-payload-normalization.js";
+import {
+  formatDeliveryOutputGuardHoldText,
+  inspectDeliveryOutputGuard,
+  resolveDeliveryOutputGuardMaxChars,
+} from "./delivery-output-guard.js";
 import { pickSummaryFromOutput } from "./helpers.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
@@ -250,6 +255,50 @@ export async function dispatchCronDelivery(
           exactKey: true,
         }),
       );
+      // Contamination gate (SON-5998): inspect the final text right before the
+      // channel send. Held deliveries are never sent; the owning agent's main
+      // session is alerted and the run is failed so evidence is retained.
+      const outputGuardVerdict = inspectDeliveryOutputGuard(
+        linkedPayloadsForDelivery
+          .map((payload) => payload.text ?? "")
+          .filter((text) => text.trim() !== "")
+          .join("\n\n"),
+        { maxChars: resolveDeliveryOutputGuardMaxChars(params.cfgWithAgentDefaults) },
+      );
+      if (outputGuardVerdict.hold) {
+        deliveryAttempted = true;
+        const holdReason = `delivery output guard hold: ${outputGuardVerdict.reasons.join("; ")}`;
+        await logCronDeliveryError(`[cron:${params.job.id}] ${holdReason}; no message was sent`);
+        try {
+          const holdText = formatDeliveryOutputGuardHoldText({
+            jobId: params.job.id,
+            channel: delivery.channel,
+            to: delivery.to,
+            threadId: delivery.threadId,
+            reasons: outputGuardVerdict.reasons,
+            inspectionUrl: resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
+              sessionKey: params.runSessionKey,
+              fallbackAgentId: params.agentId,
+              exactKey: true,
+            }),
+          });
+          await queueCronAwarenessSystemEvent({
+            cfg: params.cfgWithAgentDefaults,
+            jobId: params.job.id,
+            agentId: params.agentId,
+            deliveryIdempotencyKey: `${deliveryIdempotencyKey}:guard-hold`,
+            queueMainSession: true,
+            text: holdText,
+            targetText: holdText,
+          });
+        } catch (guardAlertError) {
+          await logCronDeliveryError(
+            `[cron:${params.job.id}] delivery output guard alert failed: ${formatErrorMessage(guardAlertError)}`,
+          );
+        }
+        recordDelivery("not-delivered", holdReason);
+        return { kind: "error", error: holdReason, delivered: false };
+      }
       deliveryAttempted = true;
       // Custom session targets retain their caller-selected identity.
       const { sessionKey: deliverySessionKey, route: directCronOutboundRoute } =
