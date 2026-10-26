@@ -122,12 +122,14 @@ export function inspectDeliveryOutputGuard(
 export function formatDeliveryOutputGuardHoldText(params: {
   jobId: string;
   channel: string;
-  to?: string;
-  threadId?: string | null;
+  to?: string | number | null;
+  threadId?: string | number | null;
   reasons: string[];
   inspectionUrl?: string;
 }): string {
-  const target = [params.channel, params.to, params.threadId != null ? `thread ${params.threadId}` : undefined]
+  const to = params.to == null ? undefined : String(params.to);
+  const threadId = params.threadId == null ? undefined : String(params.threadId);
+  const target = [params.channel, to, threadId != null ? `thread ${threadId}` : undefined]
     .filter((part) => part != null && part !== "")
     .join(" ");
   const inspection = params.inspectionUrl ? ` Inspect: ${params.inspectionUrl}` : "";
