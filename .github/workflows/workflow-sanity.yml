@@ -81,7 +81,7 @@ jobs:
       - name: Fail on tabs in workflow files
         if: steps.scope.outputs.changed == 'true'
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           from __future__ import annotations
 
           import pathlib
@@ -191,7 +191,7 @@ jobs:
 
       - name: Install pre-commit
         if: steps.scope.outputs.changed == 'true'
-        run: python -m pip install --disable-pip-version-check pre-commit==4.6.2
+        run: python3 -m pip install --disable-pip-version-check pre-commit==4.6.2
 
       - name: Install ShellCheck
         if: steps.scope.outputs.changed == 'true'
