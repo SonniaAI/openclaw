@@ -210,6 +210,10 @@ jobs:
             -o "${archive}" \
             "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${archive}"
           echo "${checksum}  ${archive}" | sha256sum -c -
+          if ! command -v xz >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends xz-utils
+          fi
           tar -xJf "${archive}" "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
           sudo install -m 0755 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
 
