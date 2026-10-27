@@ -22,6 +22,7 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { hasLiveAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   createAgentRunStaleLifecycleError,
   isAgentRunStaleLifecycleError,
@@ -96,6 +97,27 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
     { skipMaintenance: true, takeCacheOwnership: true },
   );
   return didRetire ? (retired ?? undefined) : undefined;
+}
+
+/**
+ * SON-6091: liveness oracle for an armed restart-recovery claim's owner. Mirrors the
+ * startup orphan sweeper: when the entry's writer run, lifecycle run, recovery fence
+ * runs, and the armed claim all lack a live run context in this process generation,
+ * the entry is a cross-restart orphan that admission may supersede instead of
+ * refusing forever.
+ */
+export function hasLiveRestartRecoveryClaimOwner(
+  entry: SessionEntry,
+  activeClaimRunId: string,
+  hasLive: (runId: string) => boolean = hasLiveAgentRunContext,
+): boolean {
+  const candidateRunIds = [
+    entry.activeWriterRunId,
+    entry.lifecycleRunId,
+    activeClaimRunId,
+    ...(entry.restartRecoveryRuns ?? []).map((run) => run.runId),
+  ];
+  return candidateRunIds.some((runId) => typeof runId === "string" && hasLive(runId));
 }
 
 export function createReplyRestartRecoveryClaimController(params: {
@@ -305,8 +327,19 @@ export function createReplyRestartRecoveryClaimController(params: {
     if (
       activeClaimRunId &&
       (entry.abortedLastRun === true ||
-        entry.status === "running" ||
         entry.restartRecoveryDeliveryReceiptState === "terminal-pending")
+    ) {
+      throw new Error("restart recovery claim changed before agent adoption");
+    }
+    // SON-6091: a stale cross-restart "running" entry holding an armed claim whose
+    // owning runs are gone used to deadlock every future admission on the session
+    // (the startup orphan sweeper skips armed-claim entries). Refuse only when the
+    // run registry still shows a live owner; otherwise fall through and let the
+    // ordinary claim-supersede path retake the session.
+    if (
+      activeClaimRunId &&
+      entry.status === "running" &&
+      hasLiveRestartRecoveryClaimOwner(entry, activeClaimRunId)
     ) {
       throw new Error("restart recovery claim changed before agent adoption");
     }
