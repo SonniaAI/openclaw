@@ -3,6 +3,7 @@
 
 self-hosted-runner:
   labels:
+    - spark-openclaw
     # GitHub's hosted preview labels are not yet in actionlint's built-in inventory.
     - xcode-27
     - xcode-27-xlarge
