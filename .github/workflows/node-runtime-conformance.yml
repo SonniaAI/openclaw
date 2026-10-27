@@ -99,7 +99,8 @@ jobs:
     needs: scope
     if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     name: TypeScript contracts
-    runs-on: ubuntu-24.04
+    # Portable Node contract tests; keep the architecture-specific Rust job on x64.
+    runs-on: spark-openclaw
     timeout-minutes: 15
     steps:
       - name: Checkout
