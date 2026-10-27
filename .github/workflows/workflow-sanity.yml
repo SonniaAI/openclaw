@@ -26,7 +26,8 @@ env:
 jobs:
   actionlint:
     if: (github.event_name != 'workflow_dispatch')
-    runs-on: ubuntu-24.04
+    # Read-only workflow lint/validation; actionlint and toolchains support Linux ARM64.
+    runs-on: spark-openclaw
     steps:
       - &workflow_sanity_checkout_step
         name: Checkout
@@ -198,12 +199,17 @@ jobs:
         run: |
           set -euo pipefail
           SHELLCHECK_VERSION="0.11.0"
-          archive="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          case "$(uname -m)" in
+            x86_64) target=x86_64; checksum=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198 ;;
+            aarch64|arm64) target=aarch64; checksum=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588 ;;
+            *) echo "unsupported ShellCheck runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          archive="shellcheck-v${SHELLCHECK_VERSION}.linux.${target}.tar.xz"
           curl --connect-timeout 10 --max-time 120 \
             --retry 5 --retry-delay 2 --retry-all-errors -sSfL \
             -o "${archive}" \
             "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${archive}"
-          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  ${archive}" | sha256sum -c -
+          echo "${checksum}  ${archive}" | sha256sum -c -
           tar -xJf "${archive}" "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
           sudo install -m 0755 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
 
