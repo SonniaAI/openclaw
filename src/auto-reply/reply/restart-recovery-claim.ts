@@ -34,6 +34,7 @@ import {
   createRestartRecoveryClaimChangedError,
   isAgentRunStaleLifecycleError,
 } from "../../infra/agent-lifecycle-error.js";
+import { hasLiveAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   UserTurnTranscriptRecorder,
@@ -110,6 +111,27 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
     },
   );
   return didRetire ? (retired ?? undefined) : undefined;
+}
+
+/**
+ * SON-6091: liveness oracle for an armed restart-recovery claim's owner. Mirrors the
+ * startup orphan sweeper: when the entry's writer run, lifecycle run, recovery fence
+ * runs, and the armed claim all lack a live run context in this process generation,
+ * the entry is a cross-restart orphan that admission may supersede instead of
+ * refusing forever.
+ */
+export function hasLiveRestartRecoveryClaimOwner(
+  entry: SessionEntry,
+  activeClaimRunId: string,
+  hasLive: (runId: string) => boolean = hasLiveAgentRunContext,
+): boolean {
+  const candidateRunIds = [
+    entry.activeWriterRunId,
+    entry.lifecycleRunId,
+    activeClaimRunId,
+    ...(entry.restartRecoveryRuns ?? []).map((run) => run.runId),
+  ];
+  return candidateRunIds.some((runId) => typeof runId === "string" && hasLive(runId));
 }
 
 export function createReplyRestartRecoveryClaimController(params: {
@@ -394,9 +416,21 @@ export function createReplyRestartRecoveryClaimController(params: {
       params.sessionKey,
       admissionRunId,
     );
+    // SON-6091: an armed restart-recovery claim whose owning runs are all gone in this
+    // process generation (cross-restart orphan) deadlocks every future admission. On
+    // 2026.10.9 only terminal top-level statuses persist, so the orphan shape is a
+    // non-terminal status (undefined, or a migrated "running" entry). Supersede it only
+    // when the entry is non-aborted, non-terminal-pending, non-terminal-status, and the
+    // run registry proves no live owner; otherwise keep the historical refusal.
     if (
       activeClaimRunId &&
       !canReplaceAbortedClaim &&
+      !(
+        entry.abortedLastRun !== true &&
+        entry.restartRecoveryDeliveryReceiptState !== "terminal-pending" &&
+        !isTerminalSessionStatus(entry.status) &&
+        !hasLiveRestartRecoveryClaimOwner(entry, activeClaimRunId)
+      ) &&
       (entry.abortedLastRun === true ||
         !isTerminalSessionStatus(entry.status) ||
         entry.status === "interrupted" ||
